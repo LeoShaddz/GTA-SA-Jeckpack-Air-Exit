@@ -1,17 +1,17 @@
 // JetpackAirExit.asi - GTA San Andreas PC v1.0 (US)
-// No ar, segurar o botao de sair (teclado ou controle, inclusive via GInput) por N segundos
-// faz o CJ sair da jetpack. No chao o comportamento original continua igual (basta apertar).
+// In the air, holding the exit button (keyboard or controller, including via GInput) for N seconds
+// makes CJ exit the jetpack. On the ground, the original behavior remains unchanged (just press the button).
 //
-// Tudo confirmado no gta_sa.exe 1.0 US:
-//  - CTaskSimpleJetPack::ProcessControlInput = 0x67E7B0 (thiscall, ecx = task, pilha: ped).
-//    Dentro dela o jogo so checa o botao de sair se o ped estiver no chao (bIsStanding,
-//    bit 0 do byte em ped+0x46C). Por isso no ar o botao nao faz nada.
-//  - CPad::<botao de sair, mantido> = 0x5400D0 (thiscall, ecx = CPad*). Le o mesmo mapeamento
-//    do jogo (teclado e controle). O GInput escreve no CPad, entao tambem funciona com ele.
-//  - Rotina de saida da jetpack = 0x67B660 (thiscall, ecx = task, pilha: ped), a mesma que o
-//    jogo chama ao sair no chao.
-//  - Gancho: o call em 0x67E851 (le o analogico) dentro de ProcessControlInput. Nesse ponto:
-//    esi = task, edi = ped, ebp = CPad*. Um pequeno stub passa esses 3 valores para o plugin.
+// Everything confirmed in gta_sa.exe 1.0 US:
+//  - CTaskSimpleJetPack::ProcessControlInput = 0x67E7B0 (thiscall, ecx = task, stack: ped).
+//    Inside it, the game only checks the exit button if the ped is on the ground (bIsStanding,
+//    bit 0 of the byte at ped+0x46C). Therefore, in the air the button does nothing.
+//  - CPad::<exit button, held> = 0x5400D0 (thiscall, ecx = CPad*). Reads the same input mapping
+//    used by the game (keyboard and controller). GInput writes to CPad, so it also works with it.
+//  - Jetpack exit routine = 0x67B660 (thiscall, ecx = task, stack: ped), the same routine the
+//    game calls when exiting on the ground.
+//  - Hook: the call at 0x67E851 (reads the analog input) inside ProcessControlInput. At this point:
+//    esi = task, edi = ped, ebp = CPad*. A small stub passes these 3 values to the plugin.
 #include <windows.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -48,7 +48,7 @@ static void Log(const char* fmt, ...)
     fclose(f);
 }
 
-// Chamado todo frame enquanto a jetpack esta ativa (dentro de ProcessControlInput)
+// Called every frame while the jetpack is active (inside ProcessControlInput)
 static void __cdecl Process(void* task, void* ped, void* pad)
 {
     static DWORD heldSince = 0;
@@ -56,34 +56,34 @@ static void __cdecl Process(void* task, void* ped, void* pad)
 
     DWORD now = GetTickCount();
     if (now == 0) now = 1;
-    if (lastCall == 0 || now - lastCall > 250) heldSince = 0;   // pausa/menu: recomeça a contagem
+    if (lastCall == 0 || now - lastCall > 250) heldSince = 0;   // pause/menu: restart the count
     lastCall = now;
 
-    // No chao: comportamento original do jogo (sai ao apertar)
+    // On the ground: original game behavior (exit when pressed)
     if (*(unsigned char*)((DWORD)ped + OFF_PEDFLAGS) & 1) { heldSince = 0; return; }
 
     bool held = ((PadHeld_t)FN_PADEXITHELD)(pad);
     if (!held) { heldSince = 0; return; }
 
-    if (heldSince == 0) { heldSince = now; Log("Botao de sair pressionado no ar"); return; }
+    if (heldSince == 0) { heldSince = now; Log("Exit button pressed in the air"); return; }
 
     if (now - heldSince >= gHoldMs)
     {
-        Log("Saindo da jetpack no ar apos %lu ms", now - heldSince);
+        Log("Exiting jetpack in the air after %lu ms", now - heldSince);
         heldSince = 0;
         ((ExitJetpack_t)FN_EXITJETPACK)(task, ped);
     }
 }
 
-// Stub em codigo de maquina (sem assembly inline):
-//   mov eax,0x53FD30 ; call eax          -> chama a funcao original (ecx = pad, retorno em eax)
-//   push eax                              -> guarda o retorno
+// Machine-code stub (without inline assembly):
+//   mov eax,0x53FD30 ; call eax          -> calls the original function (ecx = pad, return value in eax)
+//   push eax                              -> saves the return value
 //   push ebp ; push edi ; push esi        -> pad, ped, task
 //   mov eax,&Process ; call eax ; add esp,12
 //   pop eax ; ret
 static bool Install()
 {
-    // Confere o codigo do jogo antes de alterar
+    // Verify the game code before modifying it
     if (IsBadReadPtr((void*)(HOOK_SITE - 2), 7) || IsBadReadPtr((void*)FN_PROCINPUT, 10)) return false;
     if (*(unsigned char*)HOOK_SITE != 0xE8) return false;
     if (HOOK_SITE + 5 + *(int*)(HOOK_SITE + 1) != HOOK_ORIG_FN) return false;
@@ -121,7 +121,7 @@ static bool Install()
 static void Init()
 {
     gLog = GetPrivateProfileIntA("Main", "Log", 0, gIni) != 0;
-    if (!GetPrivateProfileIntA("Main", "Enable", 1, gIni)) { Log("Desativado no .ini"); return; }
+    if (!GetPrivateProfileIntA("Main", "Enable", 1, gIni)) { Log("Disabled in .ini"); return; }
 
     char buf[32];
     GetPrivateProfileStringA("Jetpack", "HoldSeconds", "3.0", buf, sizeof buf, gIni);
@@ -130,8 +130,8 @@ static void Init()
     if (sec > 60.0) sec = 60.0;
     gHoldMs = (DWORD)(sec * 1000.0 + 0.5);
 
-    if (!Install()) { Log("Codigo do jogo diferente do esperado (nao e o SA 1.0 US?) - mod desativado"); return; }
-    Log("Ativo: segurar %lu ms no ar", gHoldMs);
+    if (!Install()) { Log("Game code differs from expected (not SA 1.0 US?) - mod disabled"); return; }
+    Log("Active: hold for %lu ms in the air", gHoldMs);
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID)
